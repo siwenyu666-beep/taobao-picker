@@ -269,15 +269,18 @@ def format_result_fragment(compare_json):
         if not g["results"]:
             html.append("<br>暂无有效比价结果")
             continue
-        html.append("<table><tr><th>#</th><th>店铺</th><th>买齐价</th><th>省</th><th></th></tr>")
+        html.append("<table><tr><th>#</th><th>店铺</th><th>包装</th><th>件数</th><th>买齐价</th><th>省</th><th></th></tr>")
         for i, r in enumerate(g["results"], 1):
             tp = f"¥{r['total_price']}" if r.get("total_price") else f"¥{r.get('pay')}"
             saved = f"-¥{r['saved']}" if r.get("saved") else "—"
             cls = " class='best'" if i == 1 else ""
             url = r.get("url", "")
             scheme = url.replace("https://", "taobao://") if url else "#"
-            html.append(f"<tr{cls}><td>{i}</td><td>{r['shop']}</td><td><b>{tp}</b></td>"
-                        f"<td>{saved}</td><td><a href='{scheme}'>App</a> <a href='{url}' target='_blank'>网页</a></td></tr>")
+            pack_info = f"{r['per_pack']}个/包" if r.get("per_pack") else "单件"
+            qty_info = f"{r['qty']}件" if r.get("qty") else "—"
+            html.append(f"<tr{cls}><td>{i}</td><td>{r['shop']}</td><td>{pack_info}</td><td>{qty_info}</td>"
+                        f"<td><b>{tp}</b></td><td>{saved}</td>"
+                        f"<td><a href='{scheme}'>App</a> <a href='{url}' target='_blank'>网页</a></td></tr>")
         html.append("</table>")
     html.append("<br><span class='warn'>比价只读，未下单；点\"淘宝\"链接到淘宝确认后手动支付</span>")
     return "".join(html)
@@ -468,7 +471,9 @@ def format_result(compare_json):
             total_price = r.get("total_price")
             tp = f"买齐 ¥{total_price}" if total_price else f"实付 ¥{r.get('pay')}"
             saved = f"（省{r.get('saved')}）" if r.get("saved") else ""
-            lines.append(f"{i}. **{tp}** {saved} — {r['shop']} [查看商品]({r.get('url')})")
+            pack_info = f"{r['per_pack']}个/包" if r.get("per_pack") else "单件"
+            qty_info = f"{r['qty']}件" if r.get("qty") else ""
+            lines.append(f"{i}. **{tp}** {saved} — {r['shop']}（{pack_info}{'×'+qty_info if qty_info else ''}）[查看商品]({r.get('url')})")
     lines.append("\n⚠️ 比价只读，未下任何订单；下单请点链接到淘宝确认后手动支付")
     return "\n".join(lines)
 
