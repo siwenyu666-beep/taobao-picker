@@ -15,6 +15,7 @@ import asyncio
 import json
 import math
 import re
+import statistics
 import sys
 import time
 import random
@@ -605,7 +606,19 @@ async def cmd_compare(pw, listfile, top, out_path=""):
                 await page.mouse.wheel(0, 1200)
                 await human_delay(1.0, 2.0)
             html = await page.content()
-            cands = parse_search_html(html, top)
+            cands = parse_search_html(html, top + 3)  # 多取 3 家候选，供异常排除后补位
+            if not cands:
+                # 搜索偶发被风控拦截（0 候选）时重试一次
+                log("  搜索无结果，等待后重试一次…")
+                await human_delay(5.0, 8.0)
+                await page.goto("https://s.taobao.com/search?q=" + urllib.parse.quote(kw),
+                                wait_until="domcontentloaded", timeout=60000)
+                await human_delay(3.0, 5.0)
+                for _ in range(2):
+                    await page.mouse.wheel(0, 1200)
+                    await human_delay(1.0, 2.0)
+                html = await page.content()
+                cands = parse_search_html(html, top + 3)
             log(f"  候选 {len(cands)} 个")
             item_results = []
             for ci, cand in enumerate(cands):
@@ -669,13 +682,27 @@ async def cmd_compare(pw, listfile, top, out_path=""):
                         (f" | 买齐需约 {total_price}" if total_price else " | 件数口径未知"))
                 except Exception as e:
                     log(f"     出错: {e}")
+            # 异常价格过滤：与中位数偏离超过 4 倍的候选排除（可能是选错规格/口径错误）
+            prices = [r.get("total_price") or r.get("pay") for r in item_results
+                      if (r.get("total_price") or r.get("pay"))]
+            if len(prices) >= 3:
+                med = statistics.median(prices)
+                if med > 0:
+                    kept = []
+                    for r in item_results:
+                        p = r.get("total_price") or r.get("pay")
+                        if p is None or (med / 4 <= p <= med * 4):
+                            kept.append(r)
+                        else:
+                            log(f"     排除异常价格: {r['shop']} ¥{p}（中位数 ¥{med:.2f}，偏离过大）")
+                    item_results = kept
             def _sort_key(r):
                 v = r.get("total_price")
                 if v is None:
                     v = r.get("pay")
                 return (v is None, v or 1e18)
             item_results.sort(key=_sort_key)
-            all_results.append({"item": it, "results": item_results})
+            all_results.append({"item": it, "results": item_results[:top]})
 
         out = Path(out_path) if out_path else DATA_DIR / f"compare_{time.strftime('%Y%m%d_%H%M%S')}.json"
         out.write_text(json.dumps(all_results, ensure_ascii=False, indent=2), encoding="utf-8")
