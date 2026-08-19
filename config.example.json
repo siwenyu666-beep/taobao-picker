@@ -5,5 +5,6 @@
   "token": "接收消息Token（配置API接收时自定义）",
   "encodingaeskey": "接收消息EncodingAESKey（配置API接收时生成）",
   "touser": "@all",
-  "top": 5
+  "top": 5,
+  "concurrency": 3
 }

@@ -440,36 +440,33 @@ async def _snapshot(page, tag):
 
 
 async def open_confirm_page(ctx, page, nid):
-    """点立即购买，返回确认订单页（兼容同 tab 跳转/新标签页/点击失败重试）。
-    返回渲染完成的确认页 page；失败返回 None。绝不点击支付。"""
-    before = set(ctx.pages)
-    try:
-        await click_buy_now(page)
-    except Exception:
-        pass
+    """点立即购买，返回确认订单页（并发安全：只监听当前页面的弹窗）。
+    兼容同 tab 跳转/新标签页/点击失败重试。返回渲染完成的确认页 page；失败 None。"""
     target = None
     for attempt in range(2):
-        # 1) 当前页跳转
+        # 方式1: 监听当前页面的新窗口（expect_popup 只跟本页绑定，并发下不会串）
         try:
-            await page.wait_for_url(re.compile(r"buy\.|confirm", re.I), timeout=15000)
-            target = page
-            break
+            async with page.expect_popup(timeout=10000) as popup_info:
+                await click_buy_now(page)
+            t = await popup_info.value
+            if nid in t.url:
+                target = t
+                break
         except Exception:
             pass
-        # 2) 新标签页
-        new_pages = [p for p in ctx.pages if p not in before]
-        if new_pages:
-            target = new_pages[0]
-            break
-        # 3) 再点一次
-        await asyncio.sleep(2)
-        try:
-            await click_buy_now(page)
-        except Exception:
-            pass
+        # 方式2: 当前页直接跳转
+        if target is None:
+            try:
+                await page.wait_for_url(re.compile(r"buy\.|confirm", re.I), timeout=10000)
+                if nid in page.url:
+                    target = page
+                    break
+            except Exception:
+                pass
+        # 方式3: 再点一次
+        if target is None:
+            await asyncio.sleep(2)
     if target is None:
-        return None
-    if nid not in target.url:
         return None
     # 等付款区域渲染完成（绝不点击）
     try:
@@ -482,6 +479,69 @@ async def open_confirm_page(ctx, page, nid):
         return None
     await asyncio.sleep(random.uniform(1.5, 2.5))
     return target
+
+
+async def _verify_candidate(ctx, cand, it, spec, pack, packs):
+    """单个候选完整验证（独立标签页，可并发）。返回 result dict 或 None"""
+    page = await ctx.new_page()
+    try:
+        await page.goto(cand["url"], wait_until="domcontentloaded", timeout=60000)
+        await human_delay(1.5, 2.5)
+        qty = packs
+        per_pack = None
+        total_count = it.get("total")
+        if total_count is None and pack:
+            m_total = re.search(r"(\d+)\s*个", pack)
+            if m_total:
+                total_count = int(m_total.group(1)) * packs
+        if spec:
+            sel_text, per_pack, qty = await pick_sku(page, spec, pack, total_count)
+            if not sel_text:
+                log(f"     {cand['shop']}: 无匹配规格，跳过")
+                return None
+            if per_pack and total_count:
+                log(f"     {cand['shop']}: 总需求{total_count}个 ÷ SKU每包{per_pack}个 = {qty}件")
+            elif total_count:
+                log(f"     {cand['shop']}: SKU无包数，按单件计 {qty} 件")
+        elif pack:
+            await _click_sku_by_text(page, pack)
+        if qty > 1:
+            await set_qty(page, qty)
+        target = await open_confirm_page(ctx, page, cand["nid"])
+        if target is None:
+            log(f"     {cand['shop']}: 未能进入确认页，跳过")
+            return None
+        body_text = await target.inner_text("body")
+        norm = re.sub(r"\s+", "", body_text)
+        pay_region = norm[norm.find("付款详情"):] if "付款详情" in norm else norm
+        total = _find_amount(pay_region, "商品总价")
+        pay = _find_amount(pay_region, "立即支付") or _find_amount(pay_region, "合计")
+        saved = _find_amount(pay_region, "优惠共减") or _find_amount(pay_region, "店铺优惠")
+        total_price = None
+        if per_pack and total_count and pay and qty:
+            unit_per_pack = pay / qty
+            packs_needed = math.ceil(total_count / per_pack)
+            total_price = round(packs_needed * unit_per_pack, 2)
+        elif per_pack is None and total_count and pay:
+            total_price = round(pay, 2)
+        result = {
+            "nid": cand["nid"], "shop": cand["shop"], "title": cand["title"],
+            "qty": qty, "per_pack": per_pack, "total_count": total_count,
+            "total": total, "pay": pay, "saved": saved,
+            "unit_pay": round(pay / qty, 4) if pay else None,
+            "total_price": total_price, "url": cand["url"],
+        }
+        log(f"     ✅ {cand['shop']} 实付 {pay} (原{total} 省{saved})" +
+            (f" | 买齐需约 {total_price}" if total_price else " | 件数口径未知"))
+        return result
+    except Exception as e:
+        log(f"     {cand['shop']} 出错: {e}")
+        return None
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
 
 
 async def cmd_verify(pw, nid, sku_text, qty):
@@ -577,7 +637,7 @@ def _find_amount(norm_text: str, key: str):
     return None
 
 
-async def cmd_compare(pw, listfile, top, out_path=""):
+async def cmd_compare(pw, listfile, top, out_path="", concurrency=3):
     """批量比价：清单 → 逐项搜索+候选verify → 排序输出
 
     listfile 格式: [{"name":"304不锈钢外六角螺栓","spec":"M8*30","pack":"100个","packs":3}, ...]
@@ -627,72 +687,25 @@ async def cmd_compare(pw, listfile, top, out_path=""):
                     return 1e18
             cands.sort(key=lambda c: (_price_key(c),
                                       -(int(re.sub(r"\D", "", c.get("sales") or "0") or 0))))
-            log(f"  候选 {len(cands)} 个（按搜索价粗排，深度验证前 {top} 家，异常时补跑备选）")
+            log(f"  候选 {len(cands)} 个（按搜索价粗排，并发验证，异常时补跑备选）")
+            # 并发验证：每批 concurrency 个候选（同一账号并发需控制，防风控）
             item_results = []
-            for ci, cand in enumerate(cands):
-                # 已验证够 top 家且结果充足时停止；不足才补跑备选
-                if ci >= top and len(item_results) >= max(2, top - 1):
+            sem = asyncio.Semaphore(concurrency)
+            for batch_start in range(0, len(cands), concurrency):
+                if len(item_results) >= top:
                     break
-                log(f"  -- 候选{ci+1}: {cand['shop']} ¥{cand['price']} | {cand['title'][:34]}")
-                try:
-                    await page.goto(cand["url"], wait_until="domcontentloaded", timeout=60000)
-                    await human_delay(2.0, 3.0)
-                    qty = packs  # 默认：用户给的件数
-                    per_pack = None
-                    total_count = it.get("total")
-                    if total_count is None and pack:
-                        m_total = re.search(r"(\d+)\s*个", pack)
-                        if m_total:
-                            total_count = int(m_total.group(1)) * packs
-                    if spec:
-                        sel_text, per_pack, qty = await pick_sku(page, spec, pack, total_count)
-                        if not sel_text:
-                            log("     无匹配规格，跳过")
-                            continue
-                        if per_pack and total_count:
-                            log(f"     总需求{total_count}个 ÷ SKU每包{per_pack}个 = {qty}件")
-                        elif total_count:
-                            log(f"     SKU无包数信息，按单件计 {qty} 件（买齐{total_count}个，不亏量）")
-                    elif pack:
-                        await _click_sku_by_text(page, pack)
-                    if qty > 1:
-                        await set_qty(page, qty)
-                    target = await open_confirm_page(ctx, page, cand["nid"])
-                    if target is None:
-                        log("     未能进入确认页，跳过")
-                        continue
-                    body_text = await target.inner_text("body")
-                    norm = re.sub(r"\s+", "", body_text)
-                    pay_region = norm[norm.find("付款详情"):] if "付款详情" in norm else norm
-                    total = _find_amount(pay_region, "商品总价")
-                    pay = _find_amount(pay_region, "立即支付") or _find_amount(pay_region, "合计")
-                    saved = _find_amount(pay_region, "优惠共减") or _find_amount(pay_region, "店铺优惠")
-                    # 折算"买齐总需求"的总价：每包实付 × 所需包数（包数=ceil(总个数/每包个数)）
-                    total_price = None
-                    if per_pack and total_count and pay and qty:
-                        unit_per_pack = pay / qty  # 每件（SKU单位）实付
-                        packs_needed = math.ceil(total_count / per_pack)
-                        total_price = round(packs_needed * unit_per_pack, 2)
-                    elif per_pack is None and total_count and pay:
-                        total_price = round(pay, 2)  # 已按单件买够总量，实付即买齐价
-                    item_results.append({
-                        "nid": cand["nid"],
-                        "shop": cand["shop"],
-                        "title": cand["title"],
-                        "qty": qty,
-                        "per_pack": per_pack,
-                        "total_count": total_count,
-                        "total": total,
-                        "pay": pay,
-                        "saved": saved,
-                        "unit_pay": round(pay / qty, 4) if pay else None,
-                        "total_price": total_price,
-                        "url": cand["url"],
-                    })
-                    log(f"     ✅ 实付 {pay} (原{total} 省{saved})" +
-                        (f" | 买齐需约 {total_price}" if total_price else " | 件数口径未知"))
-                except Exception as e:
-                    log(f"     出错: {e}")
+                batch = cands[batch_start:batch_start + concurrency]
+                for ci, cand in enumerate(batch):
+                    log(f"  -- 候选{batch_start+ci+1}: {cand['shop']} ¥{cand['price']} | {cand['title'][:34]}")
+
+                async def _run(cand):
+                    async with sem:
+                        return await _verify_candidate(ctx, cand, it, spec, pack, packs)
+
+                rs = await asyncio.gather(*[_run(c) for c in batch])
+                for r in rs:
+                    if r:
+                        item_results.append(r)
             # 异常价格过滤：与中位数偏离超过 4 倍的候选排除（可能是选错规格/口径错误）
             prices = [r.get("total_price") or r.get("pay") for r in item_results
                       if (r.get("total_price") or r.get("pay"))]
@@ -832,6 +845,8 @@ def main():
     p.add_argument("listfile", help="清单 JSON 文件路径")
     p.add_argument("--top", type=int, default=5, help="每项取前 N 个候选")
     p.add_argument("--out", default="", help="结果输出文件路径（默认 data/compare_时间戳.json）")
+    p.add_argument("--concurrency", type=int, default=3,
+                   help="并发验证的标签页数（默认3，同一账号并发过高易触发风控）")
     p = sub.add_parser("parse", help="解析已保存的HTML")
     p.add_argument("html_path")
     args = ap.parse_args()
@@ -851,7 +866,7 @@ def main():
             if args.cmd == "verify":
                 return await cmd_verify(pw, args.nid, args.sku_text, args.qty)
             if args.cmd == "compare":
-                return await cmd_compare(pw, args.listfile, args.top, args.out)
+                return await cmd_compare(pw, args.listfile, args.top, args.out, args.concurrency)
             if args.cmd == "parse":
                 return await cmd_parse(pw, args.html_path)
             return 1

@@ -445,7 +445,8 @@ def run_compare(items, top):
         list_file.parent.mkdir(exist_ok=True)
         list_file.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
         proc = subprocess.run(
-            [str(PY), str(BOT), "compare", str(list_file), "--top", str(top), "--out", str(out_file)],
+            [str(PY), str(BOT), "compare", str(list_file), "--top", str(top),
+             "--out", str(out_file), "--concurrency", str(int(CFG.get("concurrency", 3)))],
             capture_output=True, text=True, encoding="utf-8", timeout=2400,
         )
         result = None
