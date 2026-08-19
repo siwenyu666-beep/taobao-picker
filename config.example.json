@@ -1,0 +1,9 @@
+{
+  "corpid": "你的企业微信企业ID（管理后台-我的企业-底部）",
+  "agentid": "应用AgentId（应用详情页顶部）",
+  "secret": "应用Secret（应用详情页查看）",
+  "token": "接收消息Token（配置API接收时自定义）",
+  "encodingaeskey": "接收消息EncodingAESKey（配置API接收时生成）",
+  "touser": "@all",
+  "top": 5
+}

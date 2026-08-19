@@ -1,0 +1,19 @@
+# 运行环境
+.venv/
+__pycache__/
+*.pyc
+
+# 敏感配置（含企业微信密钥、淘宝登录 cookie，绝不提交）
+config.json
+state/
+
+# 运行时数据（搜索结果、比价记录、聊天历史）
+data/
+
+# 内网穿透工具（本机运行依赖，无需入库）
+tools/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
