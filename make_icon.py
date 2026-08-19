@@ -35,9 +35,11 @@ def draw(size: int) -> Image.Image:
 
 
 if __name__ == "__main__":
-    sizes = [256, 128, 64, 48, 32, 16]
+    sizes = [512, 256, 192, 128, 64, 48, 32, 16]
     imgs = [draw(s) for s in sizes]
     imgs[0].save(OUT / "assistant.ico", sizes=[(s, s) for s in sizes],
                  append_images=imgs[1:])
-    imgs[0].save(OUT / "assistant.png")
-    print(f"图标已生成: {OUT / 'assistant.ico'}")
+    imgs[1].save(OUT / "assistant.png")          # 256
+    draw(192).save(OUT / "icon-192.png")          # PWA 图标
+    draw(512).save(OUT / "icon-512.png")          # PWA 图标
+    print(f"图标已生成: {OUT / 'assistant.ico'} + PWA 图标 192/512")

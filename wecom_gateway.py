@@ -103,6 +103,12 @@ COMPARE_LOCK = threading.Lock()  # 同时只跑一个比价（防并发操作淘
 CHAT_HTML = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>五金采购助手</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1b6ef3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="五金助手">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,'Microsoft YaHei',sans-serif;background:#eef1f5;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
@@ -201,6 +207,7 @@ addRow();
 bind('addRow',addRow);
 bind('sendBtn',send);
 loadHistory();
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}
 </script></body></html>"""
 
 
@@ -208,6 +215,42 @@ loadHistory();
 def no_cache(resp):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
+
+
+@app.route("/manifest.json")
+def pwa_manifest():
+    return flask.Response(json.dumps({
+        "name": "五金采购助手",
+        "short_name": "五金助手",
+        "description": "淘宝自动比价：发清单→真实券后价排序",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#eef1f5",
+        "theme_color": "#1b6ef3",
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        ],
+    }, ensure_ascii=False), mimetype="application/manifest+json")
+
+
+@app.route("/icon-192.png")
+def pwa_icon192():
+    return flask.send_file(BASE_DIR / "assets" / "icon-192.png", mimetype="image/png")
+
+
+@app.route("/icon-512.png")
+def pwa_icon512():
+    return flask.send_file(BASE_DIR / "assets" / "icon-512.png", mimetype="image/png")
+
+
+@app.route("/sw.js")
+def pwa_sw():
+    return flask.Response(
+        "self.addEventListener('install',e=>self.skipWaiting());"
+        "self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));"
+        "self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));});",
+        mimetype="application/javascript")
 
 
 @app.route("/", methods=["GET"])
