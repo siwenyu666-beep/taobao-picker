@@ -69,6 +69,27 @@ python wecom_gateway.py
 ]
 ```
 
+## 内网穿透：手机远程访问
+
+网页 UI 默认只监听本机 `127.0.0.1:8899`，想用手机（家里 WiFi 或在外用流量）访问，需要内网穿透。推荐 [cpolar](https://www.cpolar.com)（国内服务，免费版够用）：
+
+1. **安装**：官网下载 Windows 版 zip，解压得到 `cpolar.exe`（单文件，无需安装，放到项目 `tools/` 下即可）
+2. **注册**：https://dashboard.cpolar.com/signup 注册账号（免费）
+3. **绑定令牌**：登录后到 https://dashboard.cpolar.com/auth 复制 authtoken，执行：
+   ```bash
+   cpolar authtoken <你的authtoken>
+   ```
+4. **开隧道**（先启动网关 `python wecom_gateway.py`，再开隧道）：
+   ```bash
+   cpolar http 8899 -log=stdout
+   ```
+5. **拿公网地址**：日志出现 `Tunnel established at https://xxxxxx.cpolar.top`，手机浏览器打开该网址即可用（建议"添加到主屏幕"当 App 用）
+
+⚠️ 注意：
+- **免费版网址每次重启会变**（`xxxxxx` 随机生成），重启后重新看日志取新网址；需要固定网址可升级 cpolar 付费版
+- 微信内置浏览器打开可能交互受限，建议手机自带浏览器 / Chrome
+- Windows 一键启动：`启动采购助手.bat`（自动拉起网关 + 隧道两个窗口，隧道窗口里看当天网址）
+
 ## 命令
 
 | 命令 | 作用 |
