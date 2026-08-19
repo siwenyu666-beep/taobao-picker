@@ -476,11 +476,11 @@ async def open_confirm_page(ctx, page, nid):
         await target.wait_for_function("""() => {
             const t = (document.body.innerText || '').replace(/\\s+/g, '');
             return t.includes('合计') || t.includes('立即支付') || t.includes('提交订单');
-        }""", timeout=30000)
+        }""", timeout=20000)
     except Exception:
         await _snapshot(target, f"timeout_{nid}")
         return None
-    await asyncio.sleep(random.uniform(2.0, 3.5))
+    await asyncio.sleep(random.uniform(1.5, 2.5))
     return target
 
 
@@ -619,13 +619,24 @@ async def cmd_compare(pw, listfile, top, out_path=""):
                     await human_delay(1.0, 2.0)
                 html = await page.content()
                 cands = parse_search_html(html, top + 3)
-            log(f"  候选 {len(cands)} 个")
+            # 两级筛选：按搜索页价格+销量粗排，只对最低价的候选做深度验证
+            def _price_key(c):
+                try:
+                    return float(c.get("price") or 0)
+                except ValueError:
+                    return 1e18
+            cands.sort(key=lambda c: (_price_key(c),
+                                      -(int(re.sub(r"\D", "", c.get("sales") or "0") or 0))))
+            log(f"  候选 {len(cands)} 个（按搜索价粗排，深度验证前 {top} 家，异常时补跑备选）")
             item_results = []
             for ci, cand in enumerate(cands):
+                # 已验证够 top 家且结果充足时停止；不足才补跑备选
+                if ci >= top and len(item_results) >= max(2, top - 1):
+                    break
                 log(f"  -- 候选{ci+1}: {cand['shop']} ¥{cand['price']} | {cand['title'][:34]}")
                 try:
                     await page.goto(cand["url"], wait_until="domcontentloaded", timeout=60000)
-                    await human_delay(2.5, 4.5)
+                    await human_delay(2.0, 3.0)
                     qty = packs  # 默认：用户给的件数
                     per_pack = None
                     total_count = it.get("total")
